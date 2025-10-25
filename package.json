@@ -1,0 +1,20 @@
+{
+  "name": "blaze-analyzer-api",
+  "version": "1.0.0",
+  "description": "API para histórico de giros e banco de padrões do Blaze Double Analyzer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "fs-extra": "^11.2.0"
+  },
+  "author": "Blaze Analyzer Team",
+  "license": "MIT"
+}
+
