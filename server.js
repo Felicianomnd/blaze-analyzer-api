@@ -11,6 +11,130 @@ const PORT = process.env.PORT || 3000;
 const DB_PATH = "./database.json";
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// CONFIGURAÇÕES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const CONFIG = {
+  MAX_GIROS: 2000,        // Limite de giros armazenados
+  MAX_PADROES: 5000,      // Limite de padrões armazenados
+  POLLING_INTERVAL: 2000, // Coletar da Blaze a cada 2 segundos
+  BLAZE_API_URL: 'https://blaze.bet.br/api/singleplayer-originals/originals/roulette_games/recent/1'
+};
+
+// Variáveis de controle
+let pollingIntervalId = null;
+let collectionStats = {
+  totalCollected: 0,
+  lastCollection: null,
+  errors: 0,
+  running: false
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COLETA AUTOMÁTICA DA BLAZE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Função para converter número em cor
+function getColorFromNumber(number) {
+  if (number === 0) return 'white';
+  if (number >= 1 && number <= 7) return 'red';
+  if (number >= 8 && number <= 14) return 'black';
+  return 'unknown';
+}
+
+// Função para coletar giro da API da Blaze
+async function collectFromBlaze() {
+  try {
+    const response = await fetch(CONFIG.BLAZE_API_URL);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    // API retorna um array com 1 objeto
+    if (Array.isArray(data) && data.length > 0) {
+      const latestSpin = data[0];
+      const rollNumber = latestSpin.roll;
+      const rollColor = getColorFromNumber(rollNumber);
+      
+      const newGiro = {
+        id: `spin_${latestSpin.created_at}`,
+        number: rollNumber,
+        color: rollColor,
+        timestamp: latestSpin.created_at,
+        created_at: latestSpin.created_at,
+        collected_by: 'server'
+      };
+      
+      // Verificar se já existe no banco
+      const db = await readDB();
+      const exists = db.giros.some(g => 
+        g.id === newGiro.id || 
+        (g.timestamp === newGiro.timestamp && g.number === newGiro.number)
+      );
+      
+      if (!exists) {
+        // Adicionar novo giro
+        db.giros.unshift(newGiro);
+        db.giros = db.giros.slice(0, CONFIG.MAX_GIROS); // Limitar a 2000
+        db.metadata.totalGiros = db.giros.length;
+        await saveDB(db);
+        
+        console.log(`🎯 NOVO GIRO coletado: #${rollNumber} ${rollColor.toUpperCase()} | Total: ${db.giros.length}`);
+        collectionStats.totalCollected++;
+        return { success: true, isNew: true, giro: newGiro };
+      } else {
+        return { success: true, isNew: false, message: 'Giro já existe' };
+      }
+    } else {
+      throw new Error('Formato de resposta inválido');
+    }
+  } catch (error) {
+    console.error('❌ Erro ao coletar da Blaze:', error.message);
+    collectionStats.errors++;
+    return { success: false, error: error.message };
+  } finally {
+    collectionStats.lastCollection = new Date().toISOString();
+  }
+}
+
+// Iniciar coleta automática
+function startAutoCollection() {
+  if (collectionStats.running) {
+    console.log('⚠️ Coleta automática já está rodando');
+    return;
+  }
+  
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('🤖 INICIANDO COLETA AUTOMÁTICA DA BLAZE');
+  console.log(`   Intervalo: ${CONFIG.POLLING_INTERVAL / 1000} segundos`);
+  console.log(`   URL: ${CONFIG.BLAZE_API_URL}`);
+  console.log('═══════════════════════════════════════════════════════════');
+  
+  collectionStats.running = true;
+  
+  // Coletar imediatamente
+  collectFromBlaze();
+  
+  // Depois coletar a cada intervalo
+  pollingIntervalId = setInterval(() => {
+    collectFromBlaze();
+  }, CONFIG.POLLING_INTERVAL);
+}
+
+// Parar coleta automática
+function stopAutoCollection() {
+  if (pollingIntervalId) {
+    clearInterval(pollingIntervalId);
+    pollingIntervalId = null;
+  }
+  collectionStats.running = false;
+  console.log('⏸️ Coleta automática parada');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // FUNÇÕES DE BANCO DE DADOS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -61,11 +185,11 @@ async function initDB() {
 // ROTAS - GIROS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// GET - Retorna todos os giros (últimos 800)
+// GET - Retorna todos os giros (últimos 2000)
 app.get("/api/giros", async (req, res) => {
   try {
     const db = await readDB();
-    const limit = parseInt(req.query.limit) || 800;
+    const limit = parseInt(req.query.limit) || CONFIG.MAX_GIROS;
     const giros = db.giros.slice(0, limit);
     
     res.json({
@@ -121,8 +245,8 @@ app.post("/api/giros", async (req, res) => {
       }
     }
     
-    // Limita a 800 giros
-    db.giros = db.giros.slice(0, 800);
+    // Limita a 2000 giros
+    db.giros = db.giros.slice(0, CONFIG.MAX_GIROS);
     
     // Atualiza metadata
     db.metadata.totalGiros = db.giros.length;
@@ -168,11 +292,11 @@ app.delete("/api/giros", async (req, res) => {
 // ROTAS - PADRÕES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// GET - Retorna todos os padrões (até 4000)
+// GET - Retorna todos os padrões (até 5000)
 app.get("/api/padroes", async (req, res) => {
   try {
     const db = await readDB();
-    const limit = parseInt(req.query.limit) || 4000;
+    const limit = parseInt(req.query.limit) || CONFIG.MAX_PADROES;
     const padroes = db.padroes.slice(0, limit);
     
     res.json({
@@ -213,8 +337,8 @@ app.get("/api/padroes/stats", async (req, res) => {
       success: true,
       stats: {
         total: db.padroes.length,
-        limit: 4000,
-        percentage: ((db.padroes.length / 4000) * 100).toFixed(1),
+        limit: CONFIG.MAX_PADROES,
+        percentage: ((db.padroes.length / CONFIG.MAX_PADROES) * 100).toFixed(1),
         byType: byType,
         byConfidence: byConfidence
       }
@@ -273,8 +397,8 @@ app.post("/api/padroes", async (req, res) => {
       }
     }
     
-    // Limita a 4000 padrões
-    db.padroes = db.padroes.slice(0, 4000);
+    // Limita a 5000 padrões
+    db.padroes = db.padroes.slice(0, CONFIG.MAX_PADROES);
     
     // Atualiza metadata
     db.metadata.totalPadroes = db.padroes.length;
@@ -328,12 +452,19 @@ app.get("/api/status", async (req, res) => {
     res.json({
       success: true,
       status: 'online',
-      version: '1.0',
+      version: '2.0',
       uptime: process.uptime(),
       database: {
         giros: db.giros.length,
         padroes: db.padroes.length,
         lastUpdate: db.metadata.lastUpdate
+      },
+      autoCollection: {
+        running: collectionStats.running,
+        totalCollected: collectionStats.totalCollected,
+        lastCollection: collectionStats.lastCollection,
+        errors: collectionStats.errors,
+        interval: `${CONFIG.POLLING_INTERVAL / 1000}s`
       }
     });
   } catch (error) {
@@ -366,14 +497,19 @@ app.get("/", (req, res) => {
 // INICIALIZAÇÃO DO SERVIDOR
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.listen(PORT, async () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║  🚀 BLAZE ANALYZER API                                    
+║  🚀 BLAZE ANALYZER API v2.0                               
 ╠═══════════════════════════════════════════════════════════╣
 ║  Status: Online ✅                                        
 ║  Porta: ${PORT}                                           
 ║  Ambiente: ${process.env.NODE_ENV || 'development'}      
+╠═══════════════════════════════════════════════════════════╣
+║  Limites:                                                 
+║    • Giros: até ${CONFIG.MAX_GIROS}                       
+║    • Padrões: até ${CONFIG.MAX_PADROES}                   
+║    • Coleta automática: a cada ${CONFIG.POLLING_INTERVAL/1000}s (tempo real)
 ╠═══════════════════════════════════════════════════════════╣
 ║  Endpoints disponíveis:                                   
 ║    • GET  /api/giros                                      
@@ -390,6 +526,10 @@ app.listen(PORT, async () => {
   await initDB();
   const db = await readDB();
   console.log(`📊 Dados carregados: ${db.giros.length} giros, ${db.padroes.length} padrões`);
+  
+  // Iniciar coleta automática da Blaze
+  console.log('');
+  startAutoCollection();
 });
 
 // Tratamento de erros não capturados
