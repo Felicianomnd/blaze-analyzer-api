@@ -13,7 +13,14 @@
     "express": "^4.19.2",
     "cors": "^2.8.5",
     "fs-extra": "^11.2.0",
-    "ws": "^8.16.0"
+    "ws": "^8.16.0",
+    "bcrypt": "^5.1.1",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.0.0",
+    "nodemailer": "^6.9.7",
+    "dotenv": "^16.3.1",
+    "express-rate-limit": "^7.1.5",
+    "validator": "^13.11.0"
   },
   "author": "Blaze Analyzer Team",
   "license": "MIT"

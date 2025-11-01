@@ -3,12 +3,21 @@ const cors = require("cors");
 const fs = require("fs-extra");
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const mongoose = require('mongoose');
+require('dotenv').config();
 
 const app = express();
 
 // Middlewares
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Suporta dados grandes
+
+// Importar rotas e middlewares de autenticação
+const authRoutes = require('./routes/auth');
+const { generalLimiter } = require('./middleware/rateLimiter');
+
+// Aplicar rate limiter geral
+app.use(generalLimiter);
 
 const PORT = process.env.PORT || 3000;
 const DB_PATH = "./database.json";
@@ -216,6 +225,12 @@ async function initDB() {
   };
   await saveDB(initialData);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROTAS - AUTENTICAÇÃO
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.use('/api/auth', authRoutes);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ROTAS - GIROS
@@ -620,15 +635,35 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// Iniciar servidor
-server.listen(PORT, '0.0.0.0', async () => {
-  console.log(`
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONECTAR AO MONGODB E INICIAR SERVIDOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function startServer() {
+  try {
+    // Conectar ao MongoDB (se configurado)
+    if (process.env.MONGODB_URI) {
+      console.log('📡 Conectando ao MongoDB...');
+      await mongoose.connect(process.env.MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+      });
+      console.log('✅ MongoDB conectado com sucesso!');
+    } else {
+      console.warn('⚠️ MONGODB_URI não configurado. Autenticação desativada.');
+      console.warn('   Configure as variáveis de ambiente para habilitar login.');
+    }
+    
+    // Iniciar servidor HTTP + WebSocket
+    server.listen(PORT, '0.0.0.0', async () => {
+      console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║  🚀 BLAZE ANALYZER API v3.0 - WebSocket Edition          
 ╠═══════════════════════════════════════════════════════════╣
 ║  Status: Online ✅                                        
 ║  Porta HTTP: ${PORT}                                      
 ║  WebSocket: ATIVO ⚡                                       
+║  Autenticação: ${process.env.MONGODB_URI ? 'ATIVA 🔐' : 'DESATIVADA ⚠️'}
 ║  Ambiente: ${process.env.NODE_ENV || 'development'}      
 ╠═══════════════════════════════════════════════════════════╣
 ║  Limites:                                                 
@@ -638,13 +673,20 @@ server.listen(PORT, '0.0.0.0', async () => {
 ║    • WebSocket: Broadcast instantâneo 📡                  
 ╠═══════════════════════════════════════════════════════════╣
 ║  Endpoints HTTP:                                          
-║    • GET  /api/giros                                      
-║    • GET  /api/giros/latest                               
-║    • POST /api/giros                                      
-║    • GET  /api/padroes                                    
-║    • GET  /api/padroes/stats                              
-║    • POST /api/padroes                                    
-║    • GET  /api/status                                     
+║    🔐 Autenticação:
+║       • POST /api/auth/register                           
+║       • POST /api/auth/login                              
+║       • GET  /api/auth/verify                             
+║       • POST /api/auth/forgot-password                    
+║       • POST /api/auth/reset-password                     
+║    📊 Dados:
+║       • GET  /api/giros                                   
+║       • GET  /api/giros/latest                            
+║       • POST /api/giros                                   
+║       • GET  /api/padroes                                 
+║       • GET  /api/padroes/stats                           
+║       • POST /api/padroes                                 
+║       • GET  /api/status                                     
 ║                                                           
 ║  WebSocket:                                               
 ║    • Conectar: ws://servidor:${PORT}                      
@@ -660,11 +702,29 @@ server.listen(PORT, '0.0.0.0', async () => {
   // Iniciar coleta automática da Blaze
   console.log('');
   startAutoCollection();
-});
+    });
+    
+  } catch (error) {
+    console.error('❌ Erro ao iniciar servidor:', error);
+    process.exit(1);
+  }
+}
+
+// Iniciar servidor
+startServer();
 
 // Tratamento de erros não capturados
 process.on('unhandledRejection', (error) => {
   console.error('❌ Erro não tratado:', error);
+});
+
+// Tratamento de desconexão do MongoDB
+mongoose.connection.on('disconnected', () => {
+  console.warn('⚠️ MongoDB desconectado!');
+});
+
+mongoose.connection.on('error', (error) => {
+  console.error('❌ Erro no MongoDB:', error);
 });
 
 process.on('uncaughtException', (error) => {
