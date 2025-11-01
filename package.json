@@ -12,7 +12,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "cors": "^2.8.5",
-    "fs-extra": "^11.2.0"
+    "fs-extra": "^11.2.0",
+    "ws": "^8.16.0"
   },
   "author": "Blaze Analyzer Team",
   "license": "MIT"

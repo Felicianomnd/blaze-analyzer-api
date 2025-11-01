@@ -1,6 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 const fs = require("fs-extra");
+const { WebSocketServer } = require('ws');
+const http = require('http');
+
 const app = express();
 
 // Middlewares
@@ -30,6 +33,9 @@ let collectionStats = {
   running: false
 };
 
+// WebSocket - Armazenar clientes conectados
+const wsClients = new Set();
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLETA AUTOMÁTICA DA BLAZE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -40,6 +46,32 @@ function getColorFromNumber(number) {
   if (number >= 1 && number <= 7) return 'red';
   if (number >= 8 && number <= 14) return 'black';
   return 'unknown';
+}
+
+// ✅ BROADCAST - Enviar dados para TODOS os clientes WebSocket conectados
+function broadcastToClients(type, data) {
+  const message = JSON.stringify({ type, data, timestamp: new Date().toISOString() });
+  
+  let sent = 0;
+  let failed = 0;
+  
+  wsClients.forEach(client => {
+    try {
+      if (client.readyState === 1) { // 1 = OPEN
+        client.send(message);
+        sent++;
+      }
+    } catch (error) {
+      console.error('❌ Erro ao enviar para cliente:', error.message);
+      failed++;
+      // Remover cliente com erro
+      wsClients.delete(client);
+    }
+  });
+  
+  if (sent > 0) {
+    console.log(`📡 Broadcast enviado: ${type} → ${sent} cliente(s) | ${failed} erro(s)`);
+  }
 }
 
 // Função para coletar giro da API da Blaze
@@ -84,6 +116,10 @@ async function collectFromBlaze() {
         
         console.log(`🎯 NOVO GIRO coletado: #${rollNumber} ${rollColor.toUpperCase()} | Total: ${db.giros.length}`);
         collectionStats.totalCollected++;
+        
+        // ✅ BROADCAST INSTANTÂNEO para todos os clientes WebSocket
+        broadcastToClients('NEW_SPIN', newGiro);
+        
         return { success: true, isNew: true, giro: newGiro };
       } else {
         return { success: true, isNew: false, message: 'Giro já existe' };
@@ -452,7 +488,7 @@ app.get("/api/status", async (req, res) => {
     res.json({
       success: true,
       status: 'online',
-      version: '2.0',
+      version: '3.0 - WebSocket',
       uptime: process.uptime(),
       database: {
         giros: db.giros.length,
@@ -465,6 +501,9 @@ app.get("/api/status", async (req, res) => {
         lastCollection: collectionStats.lastCollection,
         errors: collectionStats.errors,
         interval: `${CONFIG.POLLING_INTERVAL / 1000}s`
+      },
+      websocket: {
+        connectedClients: wsClients.size
       }
     });
   } catch (error) {
@@ -479,8 +518,10 @@ app.get("/api/status", async (req, res) => {
 // GET - Healthcheck (para Render.com não hibernar)
 app.get("/", (req, res) => {
   res.json({ 
-    message: 'Blaze Analyzer API - Online ✅',
-    version: '1.0',
+    message: 'Blaze Analyzer API - Online ✅ (WebSocket Enabled)',
+    version: '3.0',
+    websocket: `ws://${req.headers.host}`,
+    connectedClients: wsClients.size,
     endpoints: [
       'GET  /api/giros',
       'GET  /api/giros/latest',
@@ -488,30 +529,115 @@ app.get("/", (req, res) => {
       'GET  /api/padroes',
       'GET  /api/padroes/stats',
       'POST /api/padroes',
-      'GET  /api/status'
+      'GET  /api/status',
+      'WS   / (WebSocket)'
     ]
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// INICIALIZAÇÃO DO SERVIDOR
+// INICIALIZAÇÃO DO SERVIDOR HTTP E WEBSOCKET
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.listen(PORT, '0.0.0.0', async () => {
+// Criar servidor HTTP
+const server = http.createServer(app);
+
+// Criar servidor WebSocket
+const wss = new WebSocketServer({ server });
+
+// Tratamento de conexões WebSocket
+wss.on('connection', (ws, req) => {
+  const clientIp = req.socket.remoteAddress;
+  console.log(`✅ Novo cliente WebSocket conectado: ${clientIp}`);
+  console.log(`📊 Total de clientes: ${wsClients.size + 1}`);
+  
+  // Adicionar cliente ao set
+  wsClients.add(ws);
+  
+  // Enviar mensagem de boas-vindas
+  ws.send(JSON.stringify({
+    type: 'CONNECTED',
+    message: 'Conectado ao Blaze Analyzer API',
+    timestamp: new Date().toISOString(),
+    clientsConnected: wsClients.size
+  }));
+  
+  // Enviar último giro imediatamente
+  readDB().then(db => {
+    if (db.giros.length > 0) {
+      ws.send(JSON.stringify({
+        type: 'INITIAL_DATA',
+        data: {
+          lastSpin: db.giros[0],
+          totalGiros: db.giros.length
+        },
+        timestamp: new Date().toISOString()
+      }));
+    }
+  });
+  
+  // Heartbeat - manter conexão viva
+  const heartbeat = setInterval(() => {
+    if (ws.readyState === 1) { // OPEN
+      ws.send(JSON.stringify({
+        type: 'PING',
+        timestamp: new Date().toISOString()
+      }));
+    }
+  }, 30000); // A cada 30 segundos
+  
+  // Quando cliente desconecta
+  ws.on('close', () => {
+    clearInterval(heartbeat);
+    wsClients.delete(ws);
+    console.log(`❌ Cliente WebSocket desconectado: ${clientIp}`);
+    console.log(`📊 Total de clientes: ${wsClients.size}`);
+  });
+  
+  // Erros
+  ws.on('error', (error) => {
+    console.error(`❌ Erro WebSocket (${clientIp}):`, error.message);
+    clearInterval(heartbeat);
+    wsClients.delete(ws);
+  });
+  
+  // Mensagens do cliente
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      console.log(`📨 Mensagem recebida do cliente:`, data);
+      
+      // Responder a PONG
+      if (data.type === 'PONG') {
+        // Cliente respondeu ao PING
+        return;
+      }
+      
+      // Outros tipos de mensagem podem ser adicionados aqui
+    } catch (error) {
+      console.error('❌ Erro ao processar mensagem:', error.message);
+    }
+  });
+});
+
+// Iniciar servidor
+server.listen(PORT, '0.0.0.0', async () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║  🚀 BLAZE ANALYZER API v2.0                               
+║  🚀 BLAZE ANALYZER API v3.0 - WebSocket Edition          
 ╠═══════════════════════════════════════════════════════════╣
 ║  Status: Online ✅                                        
-║  Porta: ${PORT}                                           
+║  Porta HTTP: ${PORT}                                      
+║  WebSocket: ATIVO ⚡                                       
 ║  Ambiente: ${process.env.NODE_ENV || 'development'}      
 ╠═══════════════════════════════════════════════════════════╣
 ║  Limites:                                                 
 ║    • Giros: até ${CONFIG.MAX_GIROS}                       
 ║    • Padrões: até ${CONFIG.MAX_PADROES}                   
-║    • Coleta automática: a cada ${CONFIG.POLLING_INTERVAL/1000}s (tempo real)
+║    • Coleta: a cada ${CONFIG.POLLING_INTERVAL/1000}s (tempo real)
+║    • WebSocket: Broadcast instantâneo 📡                  
 ╠═══════════════════════════════════════════════════════════╣
-║  Endpoints disponíveis:                                   
+║  Endpoints HTTP:                                          
 ║    • GET  /api/giros                                      
 ║    • GET  /api/giros/latest                               
 ║    • POST /api/giros                                      
@@ -519,6 +645,10 @@ app.listen(PORT, '0.0.0.0', async () => {
 ║    • GET  /api/padroes/stats                              
 ║    • POST /api/padroes                                    
 ║    • GET  /api/status                                     
+║                                                           
+║  WebSocket:                                               
+║    • Conectar: ws://servidor:${PORT}                      
+║    • Eventos: NEW_SPIN, INITIAL_DATA, PING               
 ╚═══════════════════════════════════════════════════════════╝
   `);
   
@@ -542,3 +672,13 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('⏸️ SIGTERM recebido, encerrando servidor...');
+  stopAutoCollection();
+  wsClients.forEach(client => client.close());
+  server.close(() => {
+    console.log('✅ Servidor encerrado');
+    process.exit(0);
+  });
+});
