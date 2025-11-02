@@ -256,8 +256,39 @@ router.post('/activate', async (req, res) => {
     }
 });
 
+// Função para gerar fingerprint do dispositivo
+function generateDeviceFingerprint(userAgent, ip) {
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha256');
+    hash.update(userAgent + ip);
+    return hash.digest('hex').substring(0, 16);
+}
+
+// Função para extrair informações do User Agent
+function parseUserAgent(userAgent) {
+    const ua = userAgent || '';
+    let browser = 'Desconhecido';
+    let os = 'Desconhecido';
+    
+    // Detectar navegador
+    if (ua.includes('Chrome')) browser = 'Chrome';
+    else if (ua.includes('Firefox')) browser = 'Firefox';
+    else if (ua.includes('Safari')) browser = 'Safari';
+    else if (ua.includes('Edge')) browser = 'Edge';
+    else if (ua.includes('Opera')) browser = 'Opera';
+    
+    // Detectar sistema operacional
+    if (ua.includes('Windows')) os = 'Windows';
+    else if (ua.includes('Mac')) os = 'MacOS';
+    else if (ua.includes('Linux')) os = 'Linux';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
+    
+    return { browser, os };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// LOGIN
+// LOGIN COM CONTROLE DE DISPOSITIVOS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.post('/login', async (req, res) => {
@@ -274,13 +305,15 @@ router.post('/login', async (req, res) => {
         const db = await readDB();
 
         // Buscar usuário
-        const user = db.users?.find(u => u.email.toLowerCase() === email.toLowerCase());
-        if (!user) {
+        const userIndex = db.users?.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
+        if (userIndex === -1) {
             return res.status(401).json({
                 success: false,
                 error: 'Email ou senha incorretos'
             });
         }
+
+        const user = db.users[userIndex];
 
         // Verificar senha
         const isValidPassword = await bcrypt.compare(password, user.password);
@@ -303,15 +336,14 @@ router.post('/login', async (req, res) => {
         if (user.status === 'blocked') {
             return res.status(403).json({
                 success: false,
-                error: 'Conta bloqueada. Entre em contato com o suporte.'
+                error: 'Conta bloqueada por violação dos termos de uso. Entre em contato com o suporte.',
+                blocked: true
             });
         }
 
         // Verificar se expirou
         if (user.status === 'active' && user.expiresAt) {
             if (new Date(user.expiresAt) < new Date()) {
-                // Atualizar status para expired
-                const userIndex = db.users.findIndex(u => u.id === user.id);
                 db.users[userIndex].status = 'expired';
                 await saveDB(db);
 
@@ -323,18 +355,74 @@ router.post('/login', async (req, res) => {
             }
         }
 
+        // ═══════════════════════════════════════════════════════════════════════════════
+        // CONTROLE DE DISPOSITIVOS (MÁXIMO 2)
+        // ═══════════════════════════════════════════════════════════════════════════════
+
+        const userAgent = req.headers['user-agent'] || '';
+        const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
+        const deviceFingerprint = generateDeviceFingerprint(userAgent, ip);
+        const deviceInfo = parseUserAgent(userAgent);
+
+        // Inicializar array de dispositivos se não existir
+        if (!db.users[userIndex].devices) {
+            db.users[userIndex].devices = [];
+        }
+
+        // Verificar se o dispositivo já existe
+        const existingDeviceIndex = db.users[userIndex].devices.findIndex(d => d.fingerprint === deviceFingerprint);
+
+        if (existingDeviceIndex !== -1) {
+            // Dispositivo já cadastrado - atualizar último acesso
+            db.users[userIndex].devices[existingDeviceIndex].lastAccess = new Date().toISOString();
+            db.users[userIndex].devices[existingDeviceIndex].ip = ip;
+        } else {
+            // Novo dispositivo
+            const activeDevices = db.users[userIndex].devices.filter(d => d.active);
+
+            if (activeDevices.length >= 2) {
+                // ⚠️ LIMITE DE DISPOSITIVOS ATINGIDO!
+                console.log(`⚠️ ALERTA: Usuário ${email} tentou logar em mais de 2 dispositivos!`);
+
+                return res.status(403).json({
+                    success: false,
+                    error: '🚫 LIMITE DE DISPOSITIVOS ATINGIDO!\n\nSua conta já está ativa em 2 dispositivos. Por razões de segurança e conforme nossos Termos de Uso, cada conta pode estar ativa em no máximo 2 dispositivos simultaneamente.\n\nPara continuar, remova um dispositivo existente ou entre em contato com o suporte.',
+                    deviceLimitReached: true,
+                    activeDevices: activeDevices.length
+                });
+            }
+
+            // Adicionar novo dispositivo
+            const newDevice = {
+                id: Date.now(),
+                fingerprint: deviceFingerprint,
+                browser: deviceInfo.browser,
+                os: deviceInfo.os,
+                ip: ip,
+                firstAccess: new Date().toISOString(),
+                lastAccess: new Date().toISOString(),
+                active: true
+            };
+
+            db.users[userIndex].devices.push(newDevice);
+        }
+
+        // Salvar alterações
+        await saveDB(db);
+
         // Gerar token JWT
         const token = jwt.sign(
             {
                 userId: user.id,
                 email: user.email,
-                name: user.name
+                name: user.name,
+                deviceFingerprint
             },
             process.env.JWT_SECRET || 'seu-secret-key-aqui',
             { expiresIn: '30d' }
         );
 
-        console.log(`✅ Login bem-sucedido: ${email}`);
+        console.log(`✅ Login bem-sucedido: ${email} | Dispositivos ativos: ${db.users[userIndex].devices.filter(d => d.active).length}/2`);
 
         res.json({
             success: true,
@@ -345,7 +433,8 @@ router.post('/login', async (req, res) => {
                 email: user.email,
                 status: user.status,
                 expiresAt: user.expiresAt,
-                selectedPlan: user.selectedPlan
+                selectedPlan: user.selectedPlan,
+                devicesCount: db.users[userIndex].devices.filter(d => d.active).length
             }
         });
 

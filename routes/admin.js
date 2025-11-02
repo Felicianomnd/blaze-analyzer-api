@@ -543,5 +543,91 @@ router.post('/users/:id/renew', checkAdmin, async (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// GERENCIAR DISPOSITIVOS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Listar dispositivos de um usuário
+router.get('/users/:id/devices', checkAdmin, async (req, res) => {
+    try {
+        const db = await readDB();
+        const user = db.users?.find(u => u.id === parseInt(req.params.id));
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Usuário não encontrado'
+            });
+        }
+
+        const devices = user.devices || [];
+
+        res.json({
+            success: true,
+            devices: devices.map(d => ({
+                ...d,
+                isActive: d.active
+            }))
+        });
+    } catch (error) {
+        console.error('Erro ao listar dispositivos:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao listar dispositivos'
+        });
+    }
+});
+
+// Remover dispositivo de um usuário
+router.delete('/users/:userId/devices/:deviceId', checkAdmin, async (req, res) => {
+    try {
+        const userId = parseInt(req.params.userId);
+        const deviceId = parseInt(req.params.deviceId);
+        
+        const db = await readDB();
+        const userIndex = db.users?.findIndex(u => u.id === userId);
+
+        if (userIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                error: 'Usuário não encontrado'
+            });
+        }
+
+        if (!db.users[userIndex].devices) {
+            return res.status(404).json({
+                success: false,
+                error: 'Nenhum dispositivo encontrado'
+            });
+        }
+
+        const deviceIndex = db.users[userIndex].devices.findIndex(d => d.id === deviceId);
+
+        if (deviceIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                error: 'Dispositivo não encontrado'
+            });
+        }
+
+        // Remover dispositivo
+        db.users[userIndex].devices.splice(deviceIndex, 1);
+        await saveDB(db);
+
+        console.log(`✅ Dispositivo removido: Usuário ID ${userId} | Device ID ${deviceId}`);
+
+        res.json({
+            success: true,
+            message: 'Dispositivo removido com sucesso'
+        });
+    } catch (error) {
+        console.error('Erro ao remover dispositivo:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao remover dispositivo'
+        });
+    }
+});
+
 module.exports = router;
 
