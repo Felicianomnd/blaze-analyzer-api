@@ -338,11 +338,41 @@ router.post('/login', async (req, res) => {
         const existingDevice = user.devices.find(d => d.fingerprint === deviceFingerprint);
 
         if (existingDevice) {
-            // Dispositivo já cadastrado - atualizar último acesso
-            existingDevice.lastAccess = new Date();
-            existingDevice.ip = ip;
+            // ✅ DISPOSITIVO JÁ EXISTE (ativo ou inativo)
+            if (existingDevice.active) {
+                // Dispositivo já está ativo - apenas atualizar último acesso
+                existingDevice.lastAccess = new Date();
+                existingDevice.ip = ip;
+                console.log(`✅ Dispositivo já ativo: ${deviceInfo.browser} - ${deviceInfo.os}`);
+            } else {
+                // ✅ DISPOSITIVO ESTAVA INATIVO - Verificar limite antes de reativar
+                const activeDevices = user.devices.filter(d => d.active);
+                
+                const Settings = require('../models/Settings');
+                const globalMaxDevices = await Settings.get('maxDevices', 2);
+                const maxDevices = user.maxDevices !== null ? user.maxDevices : globalMaxDevices;
+
+                if (activeDevices.length >= maxDevices) {
+                    // ⚠️ LIMITE DE DISPOSITIVOS ATINGIDO!
+                    console.log(`⚠️ ALERTA: Usuário ${email} tentou reativar dispositivo, mas já tem ${activeDevices.length}/${maxDevices} ativos!`);
+
+                    return res.status(403).json({
+                        success: false,
+                        error: `🚫 LIMITE DE DISPOSITIVOS ATINGIDO!\n\nSua conta já está ativa em ${maxDevices} dispositivo${maxDevices > 1 ? 's' : ''}. Por razões de segurança e conforme nossos Termos de Uso, cada conta pode estar ativa em no máximo ${maxDevices} dispositivo${maxDevices > 1 ? 's' : ''} simultaneamente.\n\nPara continuar, remova um dispositivo existente ou entre em contato com o suporte.`,
+                        deviceLimitReached: true,
+                        activeDevices: activeDevices.length,
+                        maxDevices: maxDevices
+                    });
+                }
+
+                // ✅ TEM LIMITE DISPONÍVEL - REATIVAR dispositivo
+                existingDevice.active = true;
+                existingDevice.lastAccess = new Date();
+                existingDevice.ip = ip;
+                console.log(`✅ Dispositivo REATIVADO: ${deviceInfo.browser} - ${deviceInfo.os} (estava inativo)`);
+            }
         } else {
-            // Novo dispositivo
+            // ✅ NOVO DISPOSITIVO (nunca usado antes)
             const activeDevices = user.devices.filter(d => d.active);
 
             // 🔧 BUSCAR LIMITE DE DISPOSITIVOS (individual ou global)
@@ -352,7 +382,7 @@ router.post('/login', async (req, res) => {
 
             if (activeDevices.length >= maxDevices) {
                 // ⚠️ LIMITE DE DISPOSITIVOS ATINGIDO!
-                console.log(`⚠️ ALERTA: Usuário ${email} tentou logar em mais de ${maxDevices} dispositivos!`);
+                console.log(`⚠️ ALERTA: Usuário ${email} tentou logar em novo dispositivo, mas já tem ${activeDevices.length}/${maxDevices} ativos!`);
 
                 return res.status(403).json({
                     success: false,
@@ -363,14 +393,17 @@ router.post('/login', async (req, res) => {
                 });
             }
 
-            // Adicionar novo dispositivo
+            // ✅ ADICIONAR NOVO DISPOSITIVO
             user.devices.push({
                 fingerprint: deviceFingerprint,
                 browser: deviceInfo.browser,
                 os: deviceInfo.os,
                 ip: ip,
-                active: true
+                active: true,
+                firstAccess: new Date(),
+                lastAccess: new Date()
             });
+            console.log(`✅ Novo dispositivo adicionado: ${deviceInfo.browser} - ${deviceInfo.os}`);
         }
 
         // Salvar alterações

@@ -568,7 +568,7 @@ router.get('/users/:id/devices', checkAdmin, async (req, res) => {
     }
 });
 
-// Remover dispositivo
+// Desconectar dispositivo (marcar como inativo)
 router.delete('/users/:userId/devices/:deviceId', checkAdmin, async (req, res) => {
     try {
         const user = await User.findById(req.params.userId);
@@ -580,21 +580,32 @@ router.delete('/users/:userId/devices/:deviceId', checkAdmin, async (req, res) =
             });
         }
 
-        // Remover dispositivo
-        user.devices = user.devices.filter(d => d._id.toString() !== req.params.deviceId);
+        // ✅ ENCONTRAR E DESATIVAR o dispositivo (NÃO deletar)
+        const device = user.devices.find(d => d._id.toString() === req.params.deviceId);
+        
+        if (!device) {
+            return res.status(404).json({
+                success: false,
+                error: 'Dispositivo não encontrado'
+            });
+        }
+
+        // Marcar como INATIVO (usuário pode logar novamente se tiver limite)
+        device.active = false;
         await user.save();
 
-        console.log(`✅ Dispositivo removido: Usuário ID ${req.params.userId} | Device ID ${req.params.deviceId}`);
+        console.log(`✅ Dispositivo desconectado: Usuário ${user.email} | Device: ${device.browser} - ${device.os} | IP: ${device.ip}`);
+        console.log(`   📱 Dispositivo marcado como inativo. Usuário pode logar novamente se tiver limite disponível.`);
 
         res.json({
             success: true,
-            message: 'Dispositivo removido com sucesso'
+            message: 'Dispositivo desconectado com sucesso'
         });
     } catch (error) {
-        console.error('Erro ao remover dispositivo:', error);
+        console.error('Erro ao desconectar dispositivo:', error);
         res.status(500).json({
             success: false,
-            error: 'Erro ao remover dispositivo'
+            error: 'Erro ao desconectar dispositivo'
         });
     }
 });
