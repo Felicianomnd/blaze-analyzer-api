@@ -345,9 +345,10 @@ router.post('/login', async (req, res) => {
             // Novo dispositivo
             const activeDevices = user.devices.filter(d => d.active);
 
-            // 🔧 BUSCAR LIMITE DE DISPOSITIVOS CONFIGURADO PELO ADMIN
+            // 🔧 BUSCAR LIMITE DE DISPOSITIVOS (individual ou global)
             const Settings = require('../models/Settings');
-            const maxDevices = await Settings.get('maxDevices', 2); // Padrão: 2 dispositivos
+            const globalMaxDevices = await Settings.get('maxDevices', 2);
+            const maxDevices = user.maxDevices !== null ? user.maxDevices : globalMaxDevices;
 
             if (activeDevices.length >= maxDevices) {
                 // ⚠️ LIMITE DE DISPOSITIVOS ATINGIDO!
@@ -389,8 +390,9 @@ router.post('/login', async (req, res) => {
 
         const activeDevicesCount = user.devices.filter(d => d.active).length;
         const Settings = require('../models/Settings');
-        const maxDevices = await Settings.get('maxDevices', 2);
-        console.log(`✅ Login bem-sucedido: ${email} | Dispositivos ativos: ${activeDevicesCount}/${maxDevices}`);
+        const globalMaxDevices = await Settings.get('maxDevices', 2);
+        const maxDevices = user.maxDevices !== null ? user.maxDevices : globalMaxDevices;
+        console.log(`✅ Login bem-sucedido: ${email} | Dispositivos ativos: ${activeDevicesCount}/${maxDevices}${user.maxDevices !== null ? ' (limite individual)' : ''}`);
 
         res.json({
             success: true,

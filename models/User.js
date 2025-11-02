@@ -68,6 +68,10 @@ const userSchema = new mongoose.Schema({
         default: null
     },
     devices: [deviceSchema],
+    maxDevices: {
+        type: Number,
+        default: null // null = usar configuração global
+    },
     createdAt: {
         type: Date,
         default: Date.now

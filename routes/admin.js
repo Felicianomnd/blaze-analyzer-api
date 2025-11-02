@@ -599,6 +599,56 @@ router.delete('/users/:userId/devices/:deviceId', checkAdmin, async (req, res) =
     }
 });
 
+// Alterar limite de dispositivos de um usuário específico
+router.put('/users/:userId/device-limit', checkAdmin, async (req, res) => {
+    try {
+        const { maxDevices } = req.body;
+        const user = await User.findById(req.params.userId);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Usuário não encontrado'
+            });
+        }
+
+        // Validar
+        if (maxDevices !== undefined) {
+            // null = usar limite global
+            if (maxDevices === null) {
+                user.maxDevices = null;
+                await user.save();
+                console.log(`⚙️ Usuário ${user.email} agora usa limite global (por ${req.admin.email})`);
+            } else {
+                const maxDevicesNum = parseInt(maxDevices);
+                if (isNaN(maxDevicesNum) || maxDevicesNum < 1 || maxDevicesNum > 10) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Limite de dispositivos deve ser entre 1 e 10, ou null para usar o limite global'
+                    });
+                }
+                
+                user.maxDevices = maxDevicesNum;
+                await user.save();
+                
+                console.log(`⚙️ Limite de dispositivos alterado para usuário ${user.email}: ${maxDevicesNum} (por ${req.admin.email})`);
+            }
+        }
+
+        res.json({
+            success: true,
+            message: 'Limite de dispositivos atualizado com sucesso!',
+            maxDevices: user.maxDevices
+        });
+    } catch (error) {
+        console.error('Erro ao atualizar limite de dispositivos:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao atualizar limite de dispositivos'
+        });
+    }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // DELETAR USUÁRIO
 // ═══════════════════════════════════════════════════════════════════════════════
