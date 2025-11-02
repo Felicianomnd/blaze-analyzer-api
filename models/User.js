@@ -1,46 +1,80 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
+
+const deviceSchema = new mongoose.Schema({
+    fingerprint: {
+        type: String,
+        required: true
+    },
+    browser: {
+        type: String,
+        default: 'Desconhecido'
+    },
+    os: {
+        type: String,
+        default: 'Desconhecido'
+    },
+    ip: {
+        type: String,
+        default: 'unknown'
+    },
+    firstAccess: {
+        type: Date,
+        default: Date.now
+    },
+    lastAccess: {
+        type: Date,
+        default: Date.now
+    },
+    active: {
+        type: Boolean,
+        default: true
+    }
+}, { _id: true });
 
 const userSchema = new mongoose.Schema({
-    email: {
-        type: String,
-        required: true,
-        unique: true,
-        lowercase: true,
-        trim: true,
-        index: true
-    },
-    password: {
-        type: String,
-        required: true,
-        minlength: 6
-    },
     name: {
         type: String,
         required: true,
         trim: true
     },
-    isActive: {
-        type: Boolean,
-        default: true
+    email: {
+        type: String,
+        required: true,
+        unique: true,
+        lowercase: true,
+        trim: true
     },
+    password: {
+        type: String,
+        required: true
+    },
+    selectedPlan: {
+        type: String,
+        enum: ['1month', '3months'],
+        required: true
+    },
+    status: {
+        type: String,
+        enum: ['pending', 'active', 'expired', 'blocked'],
+        default: 'pending'
+    },
+    expiresAt: {
+        type: Date,
+        default: null
+    },
+    activatedAt: {
+        type: Date,
+        default: null
+    },
+    devices: [deviceSchema],
     createdAt: {
         type: Date,
         default: Date.now
     },
-    lastLogin: {
+    updatedAt: {
         type: Date,
-        default: null
-    },
-    
-    // Recuperação de senha
-    resetToken: {
-        type: String,
-        default: null
-    },
-    resetTokenExpires: {
-        type: Date,
-        default: null
+        default: Date.now
     }
 }, {
     timestamps: true
@@ -59,23 +93,16 @@ userSchema.pre('save', async function(next) {
     }
 });
 
-// Método para verificar senha
+// Método para comparar senhas
 userSchema.methods.comparePassword = async function(candidatePassword) {
-    try {
-        return await bcrypt.compare(candidatePassword, this.password);
-    } catch (error) {
-        throw error;
-    }
+    return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Remover senha ao retornar JSON
+// Método para retornar dados sem senha
 userSchema.methods.toJSON = function() {
     const obj = this.toObject();
     delete obj.password;
-    delete obj.resetToken;
-    delete obj.resetTokenExpires;
     return obj;
 };
 
 module.exports = mongoose.model('User', userSchema);
-

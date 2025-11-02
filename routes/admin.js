@@ -1,39 +1,68 @@
-// Rotas administrativas
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROTAS ADMINISTRATIVAS COM MONGODB
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { checkAdmin } = require('../middleware/adminAuth');
-const fs = require('fs').promises;
-const path = require('path');
+const Admin = require('../models/Admin');
+const User = require('../models/User');
+const ActivationCode = require('../models/ActivationCode');
+const Plan = require('../models/Plan');
 
-const DB_FILE = path.join(__dirname, '../database.json');
-
-// Função auxiliar para ler banco de dados
-async function readDB() {
+// Middleware de autenticação admin
+function checkAdmin(req, res, next) {
     try {
-        const data = await fs.readFile(DB_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error('Erro ao ler banco:', error);
-        return {
-            users: [],
-            admins: [],
-            plans: [],
-            activationCodes: [],
-            giros: []
-        };
-    }
-}
+        const authHeader = req.headers.authorization;
+        
+        if (!authHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'Token não fornecido'
+            });
+        }
 
-// Função auxiliar para salvar banco de dados
-async function saveDB(data) {
-    try {
-        await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
-        return true;
+        const token = authHeader.split(' ')[1];
+        
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                error: 'Token inválido'
+            });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'seu-secret-key-aqui');
+        
+        if (decoded.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                error: 'Acesso negado - Apenas administradores'
+            });
+        }
+
+        req.admin = decoded;
+        next();
     } catch (error) {
-        console.error('Erro ao salvar banco:', error);
-        return false;
+        console.error('Erro na autenticação admin:', error);
+        
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                error: 'Token inválido'
+            });
+        }
+        
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                error: 'Token expirado'
+            });
+        }
+        
+        return res.status(500).json({
+            success: false,
+            error: 'Erro ao verificar autenticação'
+        });
     }
 }
 
@@ -46,59 +75,6 @@ function generateActivationCode() {
     }
     return code;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ⚠️ ROTA TEMPORÁRIA DE SETUP - CRIAR PRIMEIRO ADMIN
-// ACESSE UMA VEZ: GET /api/admin/setup-first-admin
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get('/setup-first-admin', async (req, res) => {
-    try {
-        const db = await readDB();
-        
-        // Verificar se já existe admin
-        if (db.admins && db.admins.length > 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Já existe um administrador cadastrado. Esta rota está desabilitada.'
-            });
-        }
-        
-        // Criar primeiro admin
-        const hashedPassword = await bcrypt.hash('Casa@21@21.', 10);
-        
-        const firstAdmin = {
-            id: 1,
-            name: 'FELICIANO DE SOUZA BRITO',
-            email: 'felicianods21@gmail.com',
-            password: hashedPassword,
-            isSuperAdmin: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-        };
-        
-        if (!db.admins) db.admins = [];
-        db.admins.push(firstAdmin);
-        
-        await saveDB(db);
-        
-        res.json({
-            success: true,
-            message: '✅ Primeiro administrador criado com sucesso!',
-            admin: {
-                name: firstAdmin.name,
-                email: firstAdmin.email
-            }
-        });
-        
-    } catch (error) {
-        console.error('Erro ao criar admin:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Erro ao criar administrador'
-        });
-    }
-});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOGIN DO ADMIN
@@ -115,10 +91,8 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        const db = await readDB();
-
         // Procurar admin
-        const admin = db.admins?.find(a => a.email === email);
+        const admin = await Admin.findOne({ email: email.toLowerCase() });
 
         if (!admin) {
             return res.status(401).json({
@@ -128,7 +102,7 @@ router.post('/login', async (req, res) => {
         }
 
         // Verificar senha
-        const isValidPassword = await bcrypt.compare(password, admin.password);
+        const isValidPassword = await admin.comparePassword(password);
 
         if (!isValidPassword) {
             return res.status(401).json({
@@ -140,7 +114,7 @@ router.post('/login', async (req, res) => {
         // Gerar token JWT
         const token = jwt.sign(
             {
-                id: admin.id,
+                id: admin._id,
                 email: admin.email,
                 name: admin.name,
                 role: 'admin',
@@ -153,11 +127,7 @@ router.post('/login', async (req, res) => {
         res.json({
             success: true,
             token,
-            admin: {
-                id: admin.id,
-                email: admin.email,
-                name: admin.name
-            }
+            admin: admin.toJSON()
         });
     } catch (error) {
         console.error('Erro no login admin:', error);
@@ -174,32 +144,32 @@ router.post('/login', async (req, res) => {
 
 router.get('/stats', checkAdmin, async (req, res) => {
     try {
-        const db = await readDB();
         const now = new Date();
 
         const stats = {
-            totalUsers: db.users?.length || 0,
-            pendingUsers: db.users?.filter(u => u.status === 'pending').length || 0,
-            activeUsers: db.users?.filter(u => u.status === 'active' && new Date(u.expiresAt) > now).length || 0,
-            expiredUsers: db.users?.filter(u => u.status === 'expired' || (u.status === 'active' && new Date(u.expiresAt) <= now)).length || 0,
-            totalCodes: db.activationCodes?.length || 0,
-            usedCodes: db.activationCodes?.filter(c => c.usedAt).length || 0,
-            unusedCodes: db.activationCodes?.filter(c => !c.usedAt).length || 0
+            totalUsers: await User.countDocuments(),
+            pendingUsers: await User.countDocuments({ status: 'pending' }),
+            activeUsers: await User.countDocuments({ 
+                status: 'active', 
+                expiresAt: { $gt: now } 
+            }),
+            expiredUsers: await User.countDocuments({
+                $or: [
+                    { status: 'expired' },
+                    { status: 'active', expiresAt: { $lte: now } }
+                ]
+            }),
+            totalCodes: await ActivationCode.countDocuments(),
+            usedCodes: await ActivationCode.countDocuments({ usedAt: { $ne: null } }),
+            unusedCodes: await ActivationCode.countDocuments({ usedAt: null })
         };
 
         // Últimos usuários cadastrados
-        const recentUsers = (db.users || [])
-            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-            .slice(0, 10)
-            .map(u => ({
-                id: u.id,
-                name: u.name,
-                email: u.email,
-                status: u.status,
-                selectedPlan: u.selectedPlan,
-                createdAt: u.createdAt,
-                expiresAt: u.expiresAt
-            }));
+        const recentUsers = await User.find()
+            .sort({ createdAt: -1 })
+            .limit(10)
+            .select('-password')
+            .lean();
 
         res.json({
             success: true,
@@ -221,44 +191,43 @@ router.get('/stats', checkAdmin, async (req, res) => {
 
 router.get('/users', checkAdmin, async (req, res) => {
     try {
-        const db = await readDB();
         const { status, search, page = 1, limit = 20 } = req.query;
 
-        let users = db.users || [];
+        let query = {};
 
         // Filtrar por status
         if (status && status !== 'all') {
-            users = users.filter(u => u.status === status);
+            query.status = status;
         }
 
         // Pesquisar
         if (search) {
-            const searchLower = search.toLowerCase();
-            users = users.filter(u =>
-                u.name.toLowerCase().includes(searchLower) ||
-                u.email.toLowerCase().includes(searchLower)
-            );
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+            ];
         }
 
-        // Ordenar por data de criação (mais recentes primeiro)
-        users.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
         // Paginação
-        const startIndex = (page - 1) * limit;
-        const endIndex = startIndex + parseInt(limit);
-        const paginatedUsers = users.slice(startIndex, endIndex);
+        const skip = (page - 1) * limit;
+        
+        const users = await User.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .select('-password')
+            .lean();
+
+        const total = await User.countDocuments(query);
 
         res.json({
             success: true,
-            users: paginatedUsers.map(u => ({
-                ...u,
-                password: undefined // Não enviar senha
-            })),
+            users,
             pagination: {
-                total: users.length,
+                total,
                 page: parseInt(page),
                 limit: parseInt(limit),
-                totalPages: Math.ceil(users.length / limit)
+                totalPages: Math.ceil(total / limit)
             }
         });
     } catch (error) {
@@ -276,8 +245,7 @@ router.get('/users', checkAdmin, async (req, res) => {
 
 router.get('/users/:id', checkAdmin, async (req, res) => {
     try {
-        const db = await readDB();
-        const user = db.users?.find(u => u.id === parseInt(req.params.id));
+        const user = await User.findById(req.params.id).select('-password').lean();
 
         if (!user) {
             return res.status(404).json({
@@ -288,10 +256,7 @@ router.get('/users/:id', checkAdmin, async (req, res) => {
 
         res.json({
             success: true,
-            user: {
-                ...user,
-                password: undefined
-            }
+            user
         });
     } catch (error) {
         console.error('Erro ao buscar usuário:', error);
@@ -317,10 +282,8 @@ router.post('/generate-code', checkAdmin, async (req, res) => {
             });
         }
 
-        const db = await readDB();
-
         // Verificar se usuário existe
-        const user = db.users?.find(u => u.id === parseInt(userId));
+        const user = await User.findById(userId);
         if (!user) {
             return res.status(404).json({
                 success: false,
@@ -329,7 +292,7 @@ router.post('/generate-code', checkAdmin, async (req, res) => {
         }
 
         // Verificar se plano existe
-        const plan = db.plans?.find(p => p.duration === planDuration);
+        const plan = await Plan.findOne({ duration: planDuration });
         if (!plan) {
             return res.status(404).json({
                 success: false,
@@ -342,7 +305,8 @@ router.post('/generate-code', checkAdmin, async (req, res) => {
         let codeExists = true;
         while (codeExists) {
             code = generateActivationCode();
-            codeExists = db.activationCodes?.some(c => c.code === code);
+            const existing = await ActivationCode.findOne({ code });
+            codeExists = !!existing;
         }
 
         // Calcular data de expiração
@@ -350,23 +314,16 @@ router.post('/generate-code', checkAdmin, async (req, res) => {
         expiresAt.setDate(expiresAt.getDate() + plan.days);
 
         // Criar código
-        const activationCode = {
-            id: (db.activationCodes?.length || 0) + 1,
+        const activationCode = new ActivationCode({
             code,
-            userId: parseInt(userId),
+            userId: user._id,
             planDuration,
             planDays: plan.days,
-            expiresAt: expiresAt.toISOString(),
-            createdAt: new Date().toISOString(),
-            createdBy: req.admin.email,
-            usedAt: null
-        };
+            expiresAt,
+            createdBy: req.admin.email
+        });
 
-        // Salvar
-        if (!db.activationCodes) db.activationCodes = [];
-        db.activationCodes.push(activationCode);
-
-        await saveDB(db);
+        await activationCode.save();
 
         res.json({
             success: true,
@@ -392,37 +349,35 @@ router.post('/generate-code', checkAdmin, async (req, res) => {
 
 router.get('/codes', checkAdmin, async (req, res) => {
     try {
-        const db = await readDB();
         const { used, userId } = req.query;
 
-        let codes = db.activationCodes || [];
+        let query = {};
 
         // Filtrar por usado/não usado
         if (used === 'true') {
-            codes = codes.filter(c => c.usedAt);
+            query.usedAt = { $ne: null };
         } else if (used === 'false') {
-            codes = codes.filter(c => !c.usedAt);
+            query.usedAt = null;
         }
 
         // Filtrar por usuário
         if (userId) {
-            codes = codes.filter(c => c.userId === parseInt(userId));
+            query.userId = userId;
         }
 
-        // Ordenar por data de criação (mais recentes primeiro)
-        codes.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const codes = await ActivationCode.find(query)
+            .sort({ createdAt: -1 })
+            .populate('userId', 'name email')
+            .lean();
 
-        // Adicionar informações do usuário
-        const codesWithUser = codes.map(c => {
-            const user = db.users?.find(u => u.id === c.userId);
-            return {
-                ...c,
-                user: user ? {
-                    name: user.name,
-                    email: user.email
-                } : null
-            };
-        });
+        // Formatar resposta
+        const codesWithUser = codes.map(c => ({
+            ...c,
+            user: c.userId ? {
+                name: c.userId.name,
+                email: c.userId.email
+            } : null
+        }));
 
         res.json({
             success: true,
@@ -438,13 +393,12 @@ router.get('/codes', checkAdmin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ATUALIZAR STATUS DO USUÁRIO (ATIVAR/DESATIVAR)
+// ATUALIZAR STATUS DO USUÁRIO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.put('/users/:id/status', checkAdmin, async (req, res) => {
     try {
         const { status } = req.body;
-        const userId = parseInt(req.params.id);
 
         if (!['pending', 'active', 'expired', 'blocked'].includes(status)) {
             return res.status(400).json({
@@ -453,25 +407,22 @@ router.put('/users/:id/status', checkAdmin, async (req, res) => {
             });
         }
 
-        const db = await readDB();
-        const userIndex = db.users?.findIndex(u => u.id === userId);
+        const user = await User.findByIdAndUpdate(
+            req.params.id,
+            { status },
+            { new: true }
+        ).select('-password');
 
-        if (userIndex === -1) {
+        if (!user) {
             return res.status(404).json({
                 success: false,
                 error: 'Usuário não encontrado'
             });
         }
 
-        db.users[userIndex].status = status;
-        await saveDB(db);
-
         res.json({
             success: true,
-            user: {
-                ...db.users[userIndex],
-                password: undefined
-            }
+            user
         });
     } catch (error) {
         console.error('Erro ao atualizar status:', error);
@@ -483,13 +434,12 @@ router.put('/users/:id/status', checkAdmin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// RENOVAR ASSINATURA DE USUÁRIO
+// RENOVAR ASSINATURA
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.post('/users/:id/renew', checkAdmin, async (req, res) => {
     try {
         const { days } = req.body;
-        const userId = parseInt(req.params.id);
 
         if (!days || days < 1) {
             return res.status(400).json({
@@ -498,41 +448,32 @@ router.post('/users/:id/renew', checkAdmin, async (req, res) => {
             });
         }
 
-        const db = await readDB();
-        const userIndex = db.users?.findIndex(u => u.id === userId);
+        const user = await User.findById(req.params.id);
 
-        if (userIndex === -1) {
+        if (!user) {
             return res.status(404).json({
                 success: false,
                 error: 'Usuário não encontrado'
             });
         }
 
-        const user = db.users[userIndex];
-
         // Calcular nova data de expiração
         let newExpiresAt;
         if (user.expiresAt && new Date(user.expiresAt) > new Date()) {
-            // Se ainda está ativo, adicionar dias à data atual de expiração
             newExpiresAt = new Date(user.expiresAt);
         } else {
-            // Se já expirou, começar de hoje
             newExpiresAt = new Date();
         }
         newExpiresAt.setDate(newExpiresAt.getDate() + parseInt(days));
 
-        user.expiresAt = newExpiresAt.toISOString();
+        user.expiresAt = newExpiresAt;
         user.status = 'active';
-
-        await saveDB(db);
+        await user.save();
 
         res.json({
             success: true,
             message: `Assinatura renovada por ${days} dias`,
-            user: {
-                ...user,
-                password: undefined
-            }
+            user: user.toJSON()
         });
     } catch (error) {
         console.error('Erro ao renovar assinatura:', error);
@@ -550,8 +491,7 @@ router.post('/users/:id/renew', checkAdmin, async (req, res) => {
 // Listar dispositivos de um usuário
 router.get('/users/:id/devices', checkAdmin, async (req, res) => {
     try {
-        const db = await readDB();
-        const user = db.users?.find(u => u.id === parseInt(req.params.id));
+        const user = await User.findById(req.params.id).select('devices').lean();
 
         if (!user) {
             return res.status(404).json({
@@ -578,43 +518,23 @@ router.get('/users/:id/devices', checkAdmin, async (req, res) => {
     }
 });
 
-// Remover dispositivo de um usuário
+// Remover dispositivo
 router.delete('/users/:userId/devices/:deviceId', checkAdmin, async (req, res) => {
     try {
-        const userId = parseInt(req.params.userId);
-        const deviceId = parseInt(req.params.deviceId);
-        
-        const db = await readDB();
-        const userIndex = db.users?.findIndex(u => u.id === userId);
+        const user = await User.findById(req.params.userId);
 
-        if (userIndex === -1) {
+        if (!user) {
             return res.status(404).json({
                 success: false,
                 error: 'Usuário não encontrado'
             });
         }
 
-        if (!db.users[userIndex].devices) {
-            return res.status(404).json({
-                success: false,
-                error: 'Nenhum dispositivo encontrado'
-            });
-        }
-
-        const deviceIndex = db.users[userIndex].devices.findIndex(d => d.id === deviceId);
-
-        if (deviceIndex === -1) {
-            return res.status(404).json({
-                success: false,
-                error: 'Dispositivo não encontrado'
-            });
-        }
-
         // Remover dispositivo
-        db.users[userIndex].devices.splice(deviceIndex, 1);
-        await saveDB(db);
+        user.devices = user.devices.filter(d => d._id.toString() !== req.params.deviceId);
+        await user.save();
 
-        console.log(`✅ Dispositivo removido: Usuário ID ${userId} | Device ID ${deviceId}`);
+        console.log(`✅ Dispositivo removido: Usuário ID ${req.params.userId} | Device ID ${req.params.deviceId}`);
 
         res.json({
             success: true,
@@ -630,4 +550,3 @@ router.delete('/users/:userId/devices/:deviceId', checkAdmin, async (req, res) =
 });
 
 module.exports = router;
-

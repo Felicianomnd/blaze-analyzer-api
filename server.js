@@ -212,44 +212,11 @@ async function saveDB(data) {
   }
 }
 
-// Inicializa banco vazio
+// Inicializa banco vazio (apenas para giros e padrões - autenticação usa MongoDB)
 async function initDB() {
   const initialData = {
     giros: [],
     padroes: [],
-    users: [],  // ✅ NOVO - Usuários
-    admins: [],  // ✅ NOVO - Administradores
-    plans: [  // ✅ NOVO - Planos padrão
-      {
-        id: 1,
-        duration: '1month',
-        name: 'Plano 1 Mês',
-        price: 29.90,
-        days: 30,
-        description: 'Acesso por 30 dias',
-        active: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 2,
-        duration: '3months',
-        name: 'Plano 3 Meses',
-        price: 79.90,
-        days: 90,
-        description: 'Acesso por 90 dias',
-        active: true,
-        createdAt: new Date().toISOString()
-      }
-    ],
-    activationCodes: [],  // ✅ NOVO - Códigos de ativação
-    settings: {  // ✅ NOVO - Configurações
-      payment: {
-        pixKey: '',
-        pixType: 'email',
-        whatsapp: '',
-        supportEmail: ''
-      }
-    },
     metadata: {
       version: '3.0',
       created_at: new Date().toISOString(),
@@ -710,13 +677,17 @@ async function startServer() {
 ║    • WebSocket: Broadcast instantâneo 📡                  
 ╠═══════════════════════════════════════════════════════════╣
 ║  Endpoints HTTP:                                          
-║    🔐 Autenticação:
+║    🔐 Autenticação (MongoDB):
 ║       • POST /api/auth/register                           
 ║       • POST /api/auth/login                              
-║       • GET  /api/auth/verify                             
-║       • POST /api/auth/forgot-password                    
-║       • POST /api/auth/reset-password                     
-║    📊 Dados:
+║       • POST /api/auth/activate
+║       • GET  /api/auth/verify
+║    👨‍💼 Admin (MongoDB):
+║       • POST /api/admin/login
+║       • GET  /api/admin/stats
+║       • GET  /api/admin/users
+║       • POST /api/admin/generate-code
+║    📊 Dados (database.json):
 ║       • GET  /api/giros                                   
 ║       • GET  /api/giros/latest                            
 ║       • POST /api/giros                                   

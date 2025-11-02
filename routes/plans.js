@@ -1,56 +1,64 @@
-// Rotas para gerenciar planos
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROTAS DE PLANOS COM MONGODB
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const express = require('express');
 const router = express.Router();
-const { checkAdmin } = require('../middleware/adminAuth');
-const fs = require('fs').promises;
-const path = require('path');
+const jwt = require('jsonwebtoken');
+const Plan = require('../models/Plan');
+const Settings = require('../models/Settings');
 
-const DB_FILE = path.join(__dirname, '../database.json');
-
-// Função auxiliar para ler banco de dados
-async function readDB() {
+// Middleware de autenticação admin
+function checkAdmin(req, res, next) {
     try {
-        const data = await fs.readFile(DB_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error('Erro ao ler banco:', error);
-        return {
-            users: [],
-            admins: [],
-            plans: [],
-            activationCodes: [],
-            giros: [],
-            settings: {}
-        };
-    }
-}
+        const authHeader = req.headers.authorization;
+        
+        if (!authHeader) {
+            return res.status(401).json({
+                success: false,
+                error: 'Token não fornecido'
+            });
+        }
 
-// Função auxiliar para salvar banco de dados
-async function saveDB(data) {
-    try {
-        await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
-        return true;
+        const token = authHeader.split(' ')[1];
+        
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                error: 'Token inválido'
+            });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'seu-secret-key-aqui');
+        
+        if (decoded.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                error: 'Acesso negado - Apenas administradores'
+            });
+        }
+
+        req.admin = decoded;
+        next();
     } catch (error) {
-        console.error('Erro ao salvar banco:', error);
-        return false;
+        return res.status(401).json({
+            success: false,
+            error: 'Token inválido ou expirado'
+        });
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LISTAR TODOS OS PLANOS (PÚBLICO - para tela de escolha de plano)
+// LISTAR TODOS OS PLANOS (PÚBLICO)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.get('/', async (req, res) => {
     try {
-        const db = await readDB();
-        const plans = db.plans || [];
-
-        // Retornar apenas planos ativos
-        const activePlans = plans.filter(p => p.active !== false);
+        const plans = await Plan.find({ active: true }).sort({ days: 1 }).lean();
 
         res.json({
             success: true,
-            plans: activePlans
+            plans
         });
     } catch (error) {
         console.error('Erro ao listar planos:', error);
@@ -67,8 +75,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:duration', async (req, res) => {
     try {
-        const db = await readDB();
-        const plan = db.plans?.find(p => p.duration === req.params.duration);
+        const plan = await Plan.findOne({ duration: req.params.duration }).lean();
 
         if (!plan) {
             return res.status(404).json({
@@ -97,33 +104,33 @@ router.get('/:duration', async (req, res) => {
 router.put('/:duration', checkAdmin, async (req, res) => {
     try {
         const { name, price, description, active } = req.body;
-        const duration = req.params.duration;
 
-        const db = await readDB();
-        const planIndex = db.plans?.findIndex(p => p.duration === duration);
+        const updateData = {
+            updatedBy: req.admin.email
+        };
 
-        if (planIndex === -1) {
+        if (name !== undefined) updateData.name = name;
+        if (price !== undefined) updateData.price = parseFloat(price);
+        if (description !== undefined) updateData.description = description;
+        if (active !== undefined) updateData.active = active;
+
+        const plan = await Plan.findOneAndUpdate(
+            { duration: req.params.duration },
+            updateData,
+            { new: true }
+        );
+
+        if (!plan) {
             return res.status(404).json({
                 success: false,
                 error: 'Plano não encontrado'
             });
         }
 
-        // Atualizar plano
-        if (name !== undefined) db.plans[planIndex].name = name;
-        if (price !== undefined) db.plans[planIndex].price = parseFloat(price);
-        if (description !== undefined) db.plans[planIndex].description = description;
-        if (active !== undefined) db.plans[planIndex].active = active;
-        
-        db.plans[planIndex].updatedAt = new Date().toISOString();
-        db.plans[planIndex].updatedBy = req.admin.email;
-
-        await saveDB(db);
-
         res.json({
             success: true,
             message: 'Plano atualizado com sucesso',
-            plan: db.plans[planIndex]
+            plan
         });
     } catch (error) {
         console.error('Erro ao atualizar plano:', error);
@@ -140,18 +147,18 @@ router.put('/:duration', checkAdmin, async (req, res) => {
 
 router.get('/payment/settings', async (req, res) => {
     try {
-        const db = await readDB();
-        const settings = db.settings?.payment || {};
+        const payment = await Settings.get('payment', {
+            pixKey: '',
+            pixType: 'email',
+            whatsapp: '',
+            supportEmail: ''
+        });
 
         res.json({
             success: true,
-            payment: {
-                pixKey: settings.pixKey || '',
-                pixType: settings.pixType || 'email',
-                whatsapp: settings.whatsapp || '',
-                supportEmail: settings.supportEmail || ''
-            }
+            payment
         });
+
     } catch (error) {
         console.error('Erro ao buscar configurações:', error);
         res.status(500).json({
@@ -169,26 +176,25 @@ router.put('/payment/settings', checkAdmin, async (req, res) => {
     try {
         const { pixKey, pixType, whatsapp, supportEmail } = req.body;
 
-        const db = await readDB();
-        
-        if (!db.settings) db.settings = {};
-        if (!db.settings.payment) db.settings.payment = {};
+        // Buscar configuração atual
+        const currentPayment = await Settings.get('payment', {});
 
-        // Atualizar configurações
-        if (pixKey !== undefined) db.settings.payment.pixKey = pixKey;
-        if (pixType !== undefined) db.settings.payment.pixType = pixType;
-        if (whatsapp !== undefined) db.settings.payment.whatsapp = whatsapp;
-        if (supportEmail !== undefined) db.settings.payment.supportEmail = supportEmail;
-        
-        db.settings.payment.updatedAt = new Date().toISOString();
-        db.settings.payment.updatedBy = req.admin.email;
+        // Atualizar campos
+        const updatedPayment = {
+            ...currentPayment,
+            pixKey: pixKey !== undefined ? pixKey : currentPayment.pixKey,
+            pixType: pixType !== undefined ? pixType : currentPayment.pixType,
+            whatsapp: whatsapp !== undefined ? whatsapp : currentPayment.whatsapp,
+            supportEmail: supportEmail !== undefined ? supportEmail : currentPayment.supportEmail
+        };
 
-        await saveDB(db);
+        // Salvar
+        await Settings.set('payment', updatedPayment, req.admin.email);
 
         res.json({
             success: true,
             message: 'Configurações atualizadas com sucesso',
-            payment: db.settings.payment
+            payment: updatedPayment
         });
     } catch (error) {
         console.error('Erro ao atualizar configurações:', error);
@@ -200,4 +206,3 @@ router.put('/payment/settings', checkAdmin, async (req, res) => {
 });
 
 module.exports = router;
-

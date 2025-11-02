@@ -1,44 +1,43 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// ROTAS DE AUTENTICAÇÃO COM SISTEMA DE CÓDIGOS DE ATIVAÇÃO
+// ROTAS DE AUTENTICAÇÃO COM MONGODB E CONTROLE DE DISPOSITIVOS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const fs = require('fs').promises;
-const path = require('path');
+const crypto = require('crypto');
+const User = require('../models/User');
+const ActivationCode = require('../models/ActivationCode');
+const Plan = require('../models/Plan');
 
-const DB_FILE = path.join(__dirname, '../database.json');
-
-// Função auxiliar para ler banco de dados
-async function readDB() {
-    try {
-        const data = await fs.readFile(DB_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error('Erro ao ler banco:', error);
-        return {
-            users: [],
-            admins: [],
-            plans: [],
-            activationCodes: [],
-            giros: [],
-            padroes: [],
-            settings: {}
-        };
-    }
+// Função para gerar fingerprint do dispositivo
+function generateDeviceFingerprint(userAgent, ip) {
+    const hash = crypto.createHash('sha256');
+    hash.update(userAgent + ip);
+    return hash.digest('hex').substring(0, 16);
 }
 
-// Função auxiliar para salvar banco de dados
-async function saveDB(data) {
-    try {
-        await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
-        return true;
-    } catch (error) {
-        console.error('Erro ao salvar banco:', error);
-        return false;
-    }
+// Função para extrair informações do User Agent
+function parseUserAgent(userAgent) {
+    const ua = userAgent || '';
+    let browser = 'Desconhecido';
+    let os = 'Desconhecido';
+    
+    // Detectar navegador
+    if (ua.includes('Chrome')) browser = 'Chrome';
+    else if (ua.includes('Firefox')) browser = 'Firefox';
+    else if (ua.includes('Safari')) browser = 'Safari';
+    else if (ua.includes('Edge')) browser = 'Edge';
+    else if (ua.includes('Opera')) browser = 'Opera';
+    
+    // Detectar sistema operacional
+    if (ua.includes('Windows')) os = 'Windows';
+    else if (ua.includes('Mac')) os = 'MacOS';
+    else if (ua.includes('Linux')) os = 'Linux';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
+    
+    return { browser, os };
 }
 
 // Middleware de autenticação
@@ -95,10 +94,8 @@ router.post('/register', async (req, res) => {
             });
         }
 
-        const db = await readDB();
-
         // Verificar se email já existe
-        const existingUser = db.users?.find(u => u.email.toLowerCase() === email.toLowerCase());
+        const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) {
             return res.status(400).json({
                 success: false,
@@ -106,38 +103,26 @@ router.post('/register', async (req, res) => {
             });
         }
 
-        // Hash da senha
-        const hashedPassword = await bcrypt.hash(password, 10);
-
         // Criar novo usuário com status PENDING
-        const newUser = {
-            id: (db.users?.length || 0) + 1,
+        const newUser = new User({
             name: name.trim(),
             email: email.trim().toLowerCase(),
-            password: hashedPassword,
+            password, // Será hasheado automaticamente pelo pre-save hook
             selectedPlan,
-            status: 'pending', // Aguardando código de ativação
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            expiresAt: null,
-            activatedAt: null
-        };
+            status: 'pending'
+        });
 
-        // Adicionar ao banco
-        if (!db.users) db.users = [];
-        db.users.push(newUser);
-
-        await saveDB(db);
+        await newUser.save();
 
         console.log(`✅ Novo usuário registrado: ${email} - Aguardando código`);
 
-        // TODO: Enviar notificação via Telegram para admin
-        // sendTelegramNotification(`🆕 Novo cadastro!\nNome: ${name}\nEmail: ${email}\nPlano: ${selectedPlan === '1month' ? '1 Mês' : '3 Meses'}`);
+        // TODO: Enviar notificação via Telegram
+        // sendTelegramNotification(...);
 
         res.status(201).json({
             success: true,
             message: 'Cadastro realizado! Aguarde o código de ativação.',
-            userId: newUser.id,
+            userId: newUser._id,
             requiresActivation: true
         });
 
@@ -165,18 +150,14 @@ router.post('/activate', async (req, res) => {
             });
         }
 
-        const db = await readDB();
-
         // Buscar usuário
-        const userIndex = db.users?.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
-        if (userIndex === -1) {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user) {
             return res.status(404).json({
                 success: false,
                 error: 'Usuário não encontrado'
             });
         }
-
-        const user = db.users[userIndex];
 
         // Verificar se já está ativo
         if (user.status === 'active') {
@@ -187,20 +168,18 @@ router.post('/activate', async (req, res) => {
         }
 
         // Buscar código de ativação
-        const codeIndex = db.activationCodes?.findIndex(c => 
-            c.code === activationCode.toUpperCase() &&
-            c.userId === user.id &&
-            !c.usedAt
-        );
+        const code = await ActivationCode.findOne({
+            code: activationCode.toUpperCase(),
+            userId: user._id,
+            usedAt: null
+        });
 
-        if (codeIndex === -1) {
+        if (!code) {
             return res.status(400).json({
                 success: false,
                 error: 'Código de ativação inválido ou já utilizado'
             });
         }
-
-        const code = db.activationCodes[codeIndex];
 
         // Verificar se código expirou
         if (new Date(code.expiresAt) < new Date()) {
@@ -211,20 +190,19 @@ router.post('/activate', async (req, res) => {
         }
 
         // Ativar usuário
-        db.users[userIndex].status = 'active';
-        db.users[userIndex].activatedAt = new Date().toISOString();
-        db.users[userIndex].expiresAt = code.expiresAt;
-        db.users[userIndex].updatedAt = new Date().toISOString();
+        user.status = 'active';
+        user.activatedAt = new Date();
+        user.expiresAt = code.expiresAt;
+        await user.save();
 
         // Marcar código como usado
-        db.activationCodes[codeIndex].usedAt = new Date().toISOString();
-
-        await saveDB(db);
+        code.usedAt = new Date();
+        await code.save();
 
         // Gerar token JWT
         const token = jwt.sign(
             {
-                userId: user.id,
+                userId: user._id,
                 email: user.email,
                 name: user.name
             },
@@ -238,13 +216,7 @@ router.post('/activate', async (req, res) => {
             success: true,
             message: 'Conta ativada com sucesso!',
             token,
-            user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                status: 'active',
-                expiresAt: code.expiresAt
-            }
+            user: user.toJSON()
         });
 
     } catch (error) {
@@ -255,37 +227,6 @@ router.post('/activate', async (req, res) => {
         });
     }
 });
-
-// Função para gerar fingerprint do dispositivo
-function generateDeviceFingerprint(userAgent, ip) {
-    const crypto = require('crypto');
-    const hash = crypto.createHash('sha256');
-    hash.update(userAgent + ip);
-    return hash.digest('hex').substring(0, 16);
-}
-
-// Função para extrair informações do User Agent
-function parseUserAgent(userAgent) {
-    const ua = userAgent || '';
-    let browser = 'Desconhecido';
-    let os = 'Desconhecido';
-    
-    // Detectar navegador
-    if (ua.includes('Chrome')) browser = 'Chrome';
-    else if (ua.includes('Firefox')) browser = 'Firefox';
-    else if (ua.includes('Safari')) browser = 'Safari';
-    else if (ua.includes('Edge')) browser = 'Edge';
-    else if (ua.includes('Opera')) browser = 'Opera';
-    
-    // Detectar sistema operacional
-    if (ua.includes('Windows')) os = 'Windows';
-    else if (ua.includes('Mac')) os = 'MacOS';
-    else if (ua.includes('Linux')) os = 'Linux';
-    else if (ua.includes('Android')) os = 'Android';
-    else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
-    
-    return { browser, os };
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOGIN COM CONTROLE DE DISPOSITIVOS
@@ -302,21 +243,17 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        const db = await readDB();
-
         // Buscar usuário
-        const userIndex = db.users?.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
-        if (userIndex === -1) {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user) {
             return res.status(401).json({
                 success: false,
                 error: 'Email ou senha incorretos'
             });
         }
 
-        const user = db.users[userIndex];
-
         // Verificar senha
-        const isValidPassword = await bcrypt.compare(password, user.password);
+        const isValidPassword = await user.comparePassword(password);
         if (!isValidPassword) {
             return res.status(401).json({
                 success: false,
@@ -344,8 +281,8 @@ router.post('/login', async (req, res) => {
         // Verificar se expirou
         if (user.status === 'active' && user.expiresAt) {
             if (new Date(user.expiresAt) < new Date()) {
-                db.users[userIndex].status = 'expired';
-                await saveDB(db);
+                user.status = 'expired';
+                await user.save();
 
                 return res.status(403).json({
                     success: false,
@@ -364,21 +301,16 @@ router.post('/login', async (req, res) => {
         const deviceFingerprint = generateDeviceFingerprint(userAgent, ip);
         const deviceInfo = parseUserAgent(userAgent);
 
-        // Inicializar array de dispositivos se não existir
-        if (!db.users[userIndex].devices) {
-            db.users[userIndex].devices = [];
-        }
-
         // Verificar se o dispositivo já existe
-        const existingDeviceIndex = db.users[userIndex].devices.findIndex(d => d.fingerprint === deviceFingerprint);
+        const existingDevice = user.devices.find(d => d.fingerprint === deviceFingerprint);
 
-        if (existingDeviceIndex !== -1) {
+        if (existingDevice) {
             // Dispositivo já cadastrado - atualizar último acesso
-            db.users[userIndex].devices[existingDeviceIndex].lastAccess = new Date().toISOString();
-            db.users[userIndex].devices[existingDeviceIndex].ip = ip;
+            existingDevice.lastAccess = new Date();
+            existingDevice.ip = ip;
         } else {
             // Novo dispositivo
-            const activeDevices = db.users[userIndex].devices.filter(d => d.active);
+            const activeDevices = user.devices.filter(d => d.active);
 
             if (activeDevices.length >= 2) {
                 // ⚠️ LIMITE DE DISPOSITIVOS ATINGIDO!
@@ -393,27 +325,22 @@ router.post('/login', async (req, res) => {
             }
 
             // Adicionar novo dispositivo
-            const newDevice = {
-                id: Date.now(),
+            user.devices.push({
                 fingerprint: deviceFingerprint,
                 browser: deviceInfo.browser,
                 os: deviceInfo.os,
                 ip: ip,
-                firstAccess: new Date().toISOString(),
-                lastAccess: new Date().toISOString(),
                 active: true
-            };
-
-            db.users[userIndex].devices.push(newDevice);
+            });
         }
 
         // Salvar alterações
-        await saveDB(db);
+        await user.save();
 
         // Gerar token JWT
         const token = jwt.sign(
             {
-                userId: user.id,
+                userId: user._id,
                 email: user.email,
                 name: user.name,
                 deviceFingerprint
@@ -422,19 +349,15 @@ router.post('/login', async (req, res) => {
             { expiresIn: '30d' }
         );
 
-        console.log(`✅ Login bem-sucedido: ${email} | Dispositivos ativos: ${db.users[userIndex].devices.filter(d => d.active).length}/2`);
+        const activeDevicesCount = user.devices.filter(d => d.active).length;
+        console.log(`✅ Login bem-sucedido: ${email} | Dispositivos ativos: ${activeDevicesCount}/2`);
 
         res.json({
             success: true,
             token,
             user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                status: user.status,
-                expiresAt: user.expiresAt,
-                selectedPlan: user.selectedPlan,
-                devicesCount: db.users[userIndex].devices.filter(d => d.active).length
+                ...user.toJSON(),
+                devicesCount: activeDevicesCount
             }
         });
 
@@ -448,13 +371,12 @@ router.post('/login', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// VERIFICAR TOKEN (MIDDLEWARE DE AUTENTICAÇÃO)
+// VERIFICAR TOKEN
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.get('/verify', authenticateToken, async (req, res) => {
     try {
-        const db = await readDB();
-        const user = db.users?.find(u => u.id === req.user.userId);
+        const user = await User.findById(req.user.userId);
 
         if (!user) {
             return res.status(404).json({
@@ -476,14 +398,7 @@ router.get('/verify', authenticateToken, async (req, res) => {
 
         res.json({
             success: true,
-            user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                status: user.status,
-                expiresAt: user.expiresAt,
-                selectedPlan: user.selectedPlan
-            }
+            user: user.toJSON()
         });
 
     } catch (error) {
@@ -496,13 +411,12 @@ router.get('/verify', authenticateToken, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BUSCAR INFORMAÇÕES DO PLANO SELECIONADO
+// BUSCAR INFORMAÇÕES DO PLANO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.get('/plan-info/:duration', async (req, res) => {
     try {
-        const db = await readDB();
-        const plan = db.plans?.find(p => p.duration === req.params.duration);
+        const plan = await Plan.findOne({ duration: req.params.duration });
 
         if (!plan) {
             return res.status(404).json({
