@@ -193,30 +193,63 @@ router.post('/activate', async (req, res) => {
         user.status = 'active';
         user.activatedAt = new Date();
         user.expiresAt = code.expiresAt;
+        
+        // 🔥 REGISTRAR DISPOSITIVO NA ATIVAÇÃO
+        const userAgent = req.headers['user-agent'] || 'Unknown';
+        const ip = req.headers['x-forwarded-for']?.split(',')[0] || 
+                   req.headers['x-real-ip'] || 
+                   req.connection.remoteAddress || 
+                   req.socket.remoteAddress || 
+                   'unknown';
+        
+        const deviceFingerprint = generateDeviceFingerprint(userAgent, ip);
+        const deviceInfo = parseUserAgent(userAgent);
+        
+        // Verificar se dispositivo já existe
+        const existingDevice = user.devices.find(d => d.fingerprint === deviceFingerprint);
+        
+        if (!existingDevice) {
+            // Adicionar primeiro dispositivo na ativação
+            user.devices.push({
+                fingerprint: deviceFingerprint,
+                browser: deviceInfo.browser,
+                os: deviceInfo.os,
+                ip: ip,
+                active: true,
+                firstAccess: new Date(),
+                lastAccess: new Date()
+            });
+            console.log(`📱 Primeiro dispositivo registrado: ${deviceInfo.browser} (${deviceInfo.os})`);
+        }
+        
         await user.save();
 
         // Marcar código como usado
         code.usedAt = new Date();
         await code.save();
 
-        // Gerar token JWT
+        // Gerar token JWT com deviceFingerprint
         const token = jwt.sign(
             {
                 userId: user._id,
                 email: user.email,
-                name: user.name
+                name: user.name,
+                deviceFingerprint
             },
             process.env.JWT_SECRET || 'seu-secret-key-aqui',
             { expiresIn: '30d' }
         );
 
-        console.log(`✅ Conta ativada: ${email}`);
+        console.log(`✅ Conta ativada: ${email} | Dispositivo: ${deviceInfo.browser} - ${deviceInfo.os}`);
 
         res.json({
             success: true,
             message: 'Conta ativada com sucesso!',
             token,
-            user: user.toJSON()
+            user: {
+                ...user.toJSON(),
+                devicesCount: user.devices.filter(d => d.active).length
+            }
         });
 
     } catch (error) {
