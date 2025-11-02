@@ -653,6 +653,52 @@ async function startServer() {
         useUnifiedTopology: true,
       });
       console.log('✅ MongoDB conectado com sucesso!');
+      
+      // ═══════════════════════════════════════════════════════════════════════════════
+      // INICIALIZAR DADOS NO MONGODB (PLANOS E ADMIN)
+      // ═══════════════════════════════════════════════════════════════════════════════
+      
+      const Admin = require('./models/Admin');
+      const Plan = require('./models/Plan');
+      
+      console.log('\n📋 Inicializando dados do MongoDB...');
+      
+      // Criar planos se não existirem
+      const plans = [
+        {
+          duration: '1month',
+          name: 'Plano 1 Mês',
+          price: 29.90,
+          days: 30,
+          description: 'Acesso por 30 dias',
+          active: true
+        },
+        {
+          duration: '3months',
+          name: 'Plano 3 Meses',
+          price: 79.90,
+          days: 90,
+          description: 'Acesso por 90 dias',
+          active: true
+        }
+      ];
+
+      for (const planData of plans) {
+        const existingPlan = await Plan.findOne({ duration: planData.duration });
+        if (!existingPlan) {
+          await Plan.create(planData);
+          console.log(`✅ Plano criado: ${planData.name}`);
+        }
+      }
+      
+      // Verificar se existe admin
+      const adminCount = await Admin.countDocuments();
+      if (adminCount === 0) {
+        console.log('⚠️ Nenhum admin encontrado. Use /api/admin/setup-first-admin para criar.');
+      } else {
+        console.log(`✅ ${adminCount} administrador(es) encontrado(s)`);
+      }
+      
     } else {
       console.warn('⚠️ MONGODB_URI não configurado. Autenticação desativada.');
       console.warn('   Configure as variáveis de ambiente para habilitar login.');
