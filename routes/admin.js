@@ -48,6 +48,59 @@ function generateActivationCode() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ⚠️ ROTA TEMPORÁRIA DE SETUP - CRIAR PRIMEIRO ADMIN
+// ACESSE UMA VEZ: GET /api/admin/setup-first-admin
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/setup-first-admin', async (req, res) => {
+    try {
+        const db = await readDB();
+        
+        // Verificar se já existe admin
+        if (db.admins && db.admins.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Já existe um administrador cadastrado. Esta rota está desabilitada.'
+            });
+        }
+        
+        // Criar primeiro admin
+        const hashedPassword = await bcrypt.hash('Casa@21@21.', 10);
+        
+        const firstAdmin = {
+            id: 1,
+            name: 'FELICIANO DE SOUZA BRITO',
+            email: 'felicianods21@gmail.com',
+            password: hashedPassword,
+            isSuperAdmin: true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+        
+        if (!db.admins) db.admins = [];
+        db.admins.push(firstAdmin);
+        
+        await saveDB(db);
+        
+        res.json({
+            success: true,
+            message: '✅ Primeiro administrador criado com sucesso!',
+            admin: {
+                name: firstAdmin.name,
+                email: firstAdmin.email
+            }
+        });
+        
+    } catch (error) {
+        console.error('Erro ao criar admin:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao criar administrador'
+        });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // LOGIN DO ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
 
