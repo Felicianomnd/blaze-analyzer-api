@@ -14,6 +14,8 @@ app.use(express.json({ limit: '50mb' })); // Suporta dados grandes
 
 // Importar rotas e middlewares de autenticação
 const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');  // ✅ NOVO
+const plansRoutes = require('./routes/plans');  // ✅ NOVO
 const { generalLimiter } = require('./middleware/rateLimiter');
 
 // Aplicar rate limiter geral
@@ -215,8 +217,41 @@ async function initDB() {
   const initialData = {
     giros: [],
     padroes: [],
+    users: [],  // ✅ NOVO - Usuários
+    admins: [],  // ✅ NOVO - Administradores
+    plans: [  // ✅ NOVO - Planos padrão
+      {
+        id: 1,
+        duration: '1month',
+        name: 'Plano 1 Mês',
+        price: 29.90,
+        days: 30,
+        description: 'Acesso por 30 dias',
+        active: true,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 2,
+        duration: '3months',
+        name: 'Plano 3 Meses',
+        price: 79.90,
+        days: 90,
+        description: 'Acesso por 90 dias',
+        active: true,
+        createdAt: new Date().toISOString()
+      }
+    ],
+    activationCodes: [],  // ✅ NOVO - Códigos de ativação
+    settings: {  // ✅ NOVO - Configurações
+      payment: {
+        pixKey: '',
+        pixType: 'email',
+        whatsapp: '',
+        supportEmail: ''
+      }
+    },
     metadata: {
-      version: '1.0',
+      version: '3.0',
       created_at: new Date().toISOString(),
       lastUpdate: new Date().toISOString(),
       totalGiros: 0,
@@ -227,10 +262,12 @@ async function initDB() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ROTAS - AUTENTICAÇÃO
+// ROTAS - AUTENTICAÇÃO E ADMINISTRAÇÃO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);  // ✅ NOVO - Rotas administrativas
+app.use('/api/plans', plansRoutes);  // ✅ NOVO - Rotas de planos
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ROTAS - GIROS
