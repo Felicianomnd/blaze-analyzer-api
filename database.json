@@ -7,6 +7,16 @@
     "lastUpdate": "2024-01-15T00:00:00Z",
     "totalGiros": 0,
     "totalPadroes": 0
-  }
+  },
+  "admins": [
+    {
+      "id": 1,
+      "name": "FELICIANO DE SOUZA BRITO",
+      "email": "felicianods21@gmail.com",
+      "password": "$2a$10$gBVHauwavKuGmfsufz/vMe4IWAx3l040vzL3dZv3W29c0g7yQqi9m",
+      "isSuperAdmin": true,
+      "createdAt": "2025-11-02T13:32:20.507Z",
+      "updatedAt": "2025-11-02T13:32:20.508Z"
+    }
+  ]
 }
-
