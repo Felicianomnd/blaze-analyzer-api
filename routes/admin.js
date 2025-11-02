@@ -599,4 +599,34 @@ router.delete('/users/:userId/devices/:deviceId', checkAdmin, async (req, res) =
     }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// DELETAR USUÁRIO
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.delete('/users/:id', checkAdmin, async (req, res) => {
+    try {
+        const user = await User.findByIdAndDelete(req.params.id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Usuário não encontrado'
+            });
+        }
+
+        console.log(`✅ Usuário deletado: ${user.email} (${user.name})`);
+
+        res.json({
+            success: true,
+            message: 'Usuário deletado com sucesso'
+        });
+    } catch (error) {
+        console.error('Erro ao deletar usuário:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao deletar usuário'
+        });
+    }
+});
+
 module.exports = router;
