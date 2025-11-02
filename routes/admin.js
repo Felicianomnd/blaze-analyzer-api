@@ -629,4 +629,63 @@ router.delete('/users/:id', checkAdmin, async (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIGURAÇÕES GLOBAIS DO SISTEMA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Buscar configurações
+router.get('/settings', checkAdmin, async (req, res) => {
+    try {
+        const Settings = require('../models/Settings');
+        
+        const maxDevices = await Settings.get('maxDevices', 2);
+        
+        res.json({
+            success: true,
+            settings: {
+                maxDevices: maxDevices
+            }
+        });
+    } catch (error) {
+        console.error('Erro ao buscar configurações:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao buscar configurações'
+        });
+    }
+});
+
+// Atualizar configurações
+router.put('/settings', checkAdmin, async (req, res) => {
+    try {
+        const { maxDevices } = req.body;
+        const Settings = require('../models/Settings');
+        
+        // Validar
+        if (maxDevices !== undefined) {
+            const maxDevicesNum = parseInt(maxDevices);
+            if (isNaN(maxDevicesNum) || maxDevicesNum < 1 || maxDevicesNum > 10) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Limite de dispositivos deve ser entre 1 e 10'
+                });
+            }
+            
+            await Settings.set('maxDevices', maxDevicesNum, req.admin.email);
+            console.log(`⚙️ Configuração atualizada: maxDevices = ${maxDevicesNum} (por ${req.admin.email})`);
+        }
+        
+        res.json({
+            success: true,
+            message: 'Configurações atualizadas com sucesso!'
+        });
+    } catch (error) {
+        console.error('Erro ao atualizar configurações:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao atualizar configurações'
+        });
+    }
+});
+
 module.exports = router;

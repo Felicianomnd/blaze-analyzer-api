@@ -345,15 +345,20 @@ router.post('/login', async (req, res) => {
             // Novo dispositivo
             const activeDevices = user.devices.filter(d => d.active);
 
-            if (activeDevices.length >= 2) {
+            // 🔧 BUSCAR LIMITE DE DISPOSITIVOS CONFIGURADO PELO ADMIN
+            const Settings = require('../models/Settings');
+            const maxDevices = await Settings.get('maxDevices', 2); // Padrão: 2 dispositivos
+
+            if (activeDevices.length >= maxDevices) {
                 // ⚠️ LIMITE DE DISPOSITIVOS ATINGIDO!
-                console.log(`⚠️ ALERTA: Usuário ${email} tentou logar em mais de 2 dispositivos!`);
+                console.log(`⚠️ ALERTA: Usuário ${email} tentou logar em mais de ${maxDevices} dispositivos!`);
 
                 return res.status(403).json({
                     success: false,
-                    error: '🚫 LIMITE DE DISPOSITIVOS ATINGIDO!\n\nSua conta já está ativa em 2 dispositivos. Por razões de segurança e conforme nossos Termos de Uso, cada conta pode estar ativa em no máximo 2 dispositivos simultaneamente.\n\nPara continuar, remova um dispositivo existente ou entre em contato com o suporte.',
+                    error: `🚫 LIMITE DE DISPOSITIVOS ATINGIDO!\n\nSua conta já está ativa em ${maxDevices} dispositivo${maxDevices > 1 ? 's' : ''}. Por razões de segurança e conforme nossos Termos de Uso, cada conta pode estar ativa em no máximo ${maxDevices} dispositivo${maxDevices > 1 ? 's' : ''} simultaneamente.\n\nPara continuar, remova um dispositivo existente ou entre em contato com o suporte.`,
                     deviceLimitReached: true,
-                    activeDevices: activeDevices.length
+                    activeDevices: activeDevices.length,
+                    maxDevices: maxDevices
                 });
             }
 
@@ -383,7 +388,9 @@ router.post('/login', async (req, res) => {
         );
 
         const activeDevicesCount = user.devices.filter(d => d.active).length;
-        console.log(`✅ Login bem-sucedido: ${email} | Dispositivos ativos: ${activeDevicesCount}/2`);
+        const Settings = require('../models/Settings');
+        const maxDevices = await Settings.get('maxDevices', 2);
+        console.log(`✅ Login bem-sucedido: ${email} | Dispositivos ativos: ${activeDevicesCount}/${maxDevices}`);
 
         res.json({
             success: true,
