@@ -77,6 +77,56 @@ function generateActivationCode() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// 🔧 ROTA TEMPORÁRIA - CRIAR PRIMEIRO ADMIN (SEM AUTENTICAÇÃO)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/setup-first-admin', async (req, res) => {
+    try {
+        // Verificar se já existe algum admin
+        const adminCount = await Admin.countDocuments();
+        
+        if (adminCount > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Admin já existe! Use a rota de login normal.',
+                adminsCount: adminCount
+            });
+        }
+
+        // Criar admin padrão
+        const admin = new Admin({
+            name: 'FELICIANO DE SOUZA BRITO',
+            email: 'felicianods21@gmail.com',
+            password: 'Casa@21@21.', // Será hasheado automaticamente
+            isSuperAdmin: true
+        });
+
+        await admin.save();
+
+        console.log('✅ Administrador padrão criado via setup!');
+
+        res.json({
+            success: true,
+            message: '✅ Administrador criado com sucesso!',
+            admin: {
+                name: admin.name,
+                email: admin.email,
+                isSuperAdmin: admin.isSuperAdmin
+            },
+            nextStep: 'Agora você pode fazer login normalmente!'
+        });
+
+    } catch (error) {
+        console.error('❌ Erro ao criar admin:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erro ao criar administrador',
+            details: error.message
+        });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // LOGIN DO ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
 
